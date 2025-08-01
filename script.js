@@ -41,6 +41,8 @@ const programNameError = document.getElementById('programNameError');
 const parseBtn = document.getElementById('parseBtn');
 const generateBtn = document.getElementById('generateBtn');
 const copyBtn = document.getElementById('copyBtn');
+const beautifyBtn = document.getElementById('beautifyBtn');
+const javaVersionSelect = document.getElementById('javaVersion');
 const structurePanel = document.getElementById('structurePanel');
 const structureContainer = document.getElementById('structureContainer');
 const fieldModal = document.getElementById('fieldModal');
@@ -112,6 +114,16 @@ generateBtn.addEventListener('click', (e) => {
         outputEditor.setValue(javaCode, -1);
     } catch (error) {
         alert("Error generating DTO classes: " + error.message);
+    }
+});
+
+beautifyBtn.addEventListener('click', () => {
+    try {
+        const json = jsonEditor.getValue();
+        const obj = JSON.parse(json);
+        jsonEditor.setValue(JSON.stringify(obj, null, 2), -1);
+    } catch (error) {
+        alert('Invalid JSON: ' + error.message);
     }
 });
 
@@ -313,6 +325,9 @@ function saveFieldConfiguration() {
 }
 
 function generateClass(className, fields) {
+    const validationPackage = javaVersionSelect.value === '17'
+        ? 'jakarta.validation.constraints'
+        : 'javax.validation.constraints';
     const imports = new Set([
         'import lombok.Data;',
         'import java.io.Serial;',
@@ -326,10 +341,10 @@ function generateClass(className, fields) {
 
         if (cfg.jsonAlias) imports.add('import com.fasterxml.jackson.annotation.JsonAlias;');
         if (cfg.required) {
-            if (cfg.type === 'String') imports.add('import javax.validation.constraints.NotBlank;');
-            else imports.add('import javax.validation.constraints.NotNull;');
+            if (cfg.type === 'String') imports.add(`import ${validationPackage}.NotBlank;`);
+            else imports.add(`import ${validationPackage}.NotNull;`);
         }
-        if (cfg.maxLength) imports.add('import javax.validation.constraints.Size;');
+        if (cfg.maxLength) imports.add(`import ${validationPackage}.Size;`);
         if (cfg.type === 'BigDecimal') imports.add('import java.math.BigDecimal;');
         if (cfg.type === 'LocalDate') imports.add('import java.time.LocalDate;');
         if (cfg.type === 'LocalDateTime') imports.add('import java.time.LocalDateTime;');
