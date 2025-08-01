@@ -11,3 +11,7 @@
 .modal-container {
     transition: transform 0.25s ease;
 }
+
+body {
+    background-color: #fde68a;
+}
