@@ -355,7 +355,6 @@ function generateClass(className, fields) {
     let code = Array.from(imports).sort().join('\n') + '\n\n@Data\n';
     code += `public class ${className} implements Serializable {\n\n`;
     code += '    /** serialVersionUID */\n';
-    code += '    @Serial\n';
     code += '    private static final long serialVersionUID = 1L;\n\n';
 
     for (const field of fields) {
@@ -366,7 +365,7 @@ function generateClass(className, fields) {
         code += `    @JsonProperty(\"${field.name}\")\n`;
         if (cfg.jsonAlias) {
             const aliases = cfg.jsonAlias.split(',').map(a => `\"${a.trim()}\"`).join(', ');
-            code += `    @JsonAlias({${aliases}})\n`;
+            code += `    @JsonAlias(${aliases})\n`;
         }
         if (cfg.required) {
             code += cfg.type === 'String'
@@ -376,7 +375,9 @@ function generateClass(className, fields) {
         if (cfg.maxLength) {
             code += `    @Size(message = \"${field.name} 長度不得超過 ${cfg.maxLength}\", max = ${cfg.maxLength})\n`;
         }
-        code += `    private ${cfg.type} ${field.name};\n\n`;
+        // Convert field.name to lower camel case
+        const camelCaseName = field.name.replace(/^[A-Z]/, m => m.toLowerCase()).replace(/_([a-zA-Z])/g, (_, c) => c.toUpperCase());
+        code += `    private ${cfg.type} ${camelCaseName};\n\n`;
     }
     code += '}';
     return code;
