@@ -38,7 +38,6 @@ let rootClassName = "";
 
 const programNameInput = document.getElementById('programName');
 const programNameError = document.getElementById('programNameError');
-const parseBtn = document.getElementById('parseBtn');
 const generateBtn = document.getElementById('generateBtn');
 const copyBtn = document.getElementById('copyBtn');
 const beautifyBtn = document.getElementById('beautifyBtn');
@@ -60,12 +59,12 @@ function validateProgramName() {
     programNameError.classList.add('hidden');
     return true;
 }
-
-parseBtn.addEventListener('click', (e) => {
+generateBtn.addEventListener('click', (e) => {
     if (!validateProgramName()) {
         e.preventDefault();
         return;
     }
+
     try {
         const jsonInput = jsonEditor.getValue();
         const jsonObj = JSON.parse(jsonInput);
@@ -89,22 +88,6 @@ parseBtn.addEventListener('click', (e) => {
         fieldConfigurations = {};
         displayStructure(jsonStructure, rootClassName);
         structurePanel.classList.remove('hidden');
-        generateBtn.disabled = false;
-
-    } catch (error) {
-        alert("Error parsing JSON: " + error.message);
-    }
-});
-
-generateBtn.addEventListener('click', (e) => {
-    if (!validateProgramName()) {
-        e.preventDefault();
-        return;
-    }
-
-    try {
-        const programName = programNameInput.value.trim();
-        if (!programName) throw new Error("Program name is required");
 
         const classes = extractClasses(jsonStructure, rootClassName);
         let javaCode = '';
