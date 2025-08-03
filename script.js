@@ -35,6 +35,8 @@ let fieldConfigurations = {};
 let currentField = null;
 let isRequest = false;
 let rootClassName = "";
+let classesMap = {};
+let classValidationMap = {};
 
 const programNameInput = document.getElementById('programName');
 const programNameError = document.getElementById('programNameError');
@@ -89,10 +91,11 @@ generateBtn.addEventListener('click', (e) => {
         displayStructure(jsonStructure, rootClassName);
         structurePanel.classList.remove('hidden');
 
-        const classes = extractClasses(jsonStructure, rootClassName);
+        classesMap = extractClasses(jsonStructure, rootClassName);
+        classValidationMap = computeValidationNeeds(classesMap);
         let javaCode = '';
-        for (const className in classes) {
-            javaCode += generateClass(className, classes[className]) + '\n\n';
+        for (const className in classesMap) {
+            javaCode += generateClass(className, classesMap[className]) + '\n\n';
         }
         outputEditor.setValue(javaCode, -1);
     } catch (error) {
@@ -146,6 +149,10 @@ function capitalize(str) {
 function isStandardType(type) {
     const standardTypes = ['String', 'Integer', 'Long', 'Double', 'Boolean', 'BigDecimal', 'LocalDate', 'LocalDateTime', 'Timestamp'];
     return standardTypes.includes(type);
+}
+
+function getBaseType(type) {
+    return type.startsWith('List<') ? type.slice(5, -1) : type;
 }
 
 function displayStructure(obj, path) {
@@ -237,6 +244,33 @@ function extractClasses(obj, rootName) {
     return classes;
 }
 
+function computeValidationNeeds(classes) {
+    const cache = {};
+
+    function needsValidation(className) {
+        if (cache[className] !== undefined) return cache[className];
+        let result = false;
+        for (const field of classes[className]) {
+            const cfg = fieldConfigurations[`${className}.${field.name}`];
+            if (cfg.required || cfg.maxLength) {
+                result = true;
+                break;
+            }
+            if (classes[field.type] && needsValidation(field.type)) {
+                result = true;
+                break;
+            }
+        }
+        cache[className] = result;
+        return result;
+    }
+
+    for (const cls in classes) {
+        needsValidation(cls);
+    }
+    return cache;
+}
+
 function openFieldModal(fieldPath) {
     currentField = fieldPath;
     const config = fieldConfigurations[fieldPath];
@@ -298,10 +332,11 @@ function saveFieldConfiguration() {
 
     // Re-generate DTO after saving field configuration
     if (jsonStructure && rootClassName) {
-        const classes = extractClasses(jsonStructure, rootClassName);
+        classesMap = extractClasses(jsonStructure, rootClassName);
+        classValidationMap = computeValidationNeeds(classesMap);
         let javaCode = '';
-        for (const className in classes) {
-            javaCode += generateClass(className, classes[className]) + '\n\n';
+        for (const className in classesMap) {
+            javaCode += generateClass(className, classesMap[className]) + '\n\n';
         }
         outputEditor.setValue(javaCode, -1);
     }
@@ -311,6 +346,9 @@ function generateClass(className, fields) {
     const validationPackage = javaVersionSelect.value === '17'
         ? 'jakarta.validation.constraints'
         : 'javax.validation.constraints';
+    const validationBasePackage = javaVersionSelect.value === '17'
+        ? 'jakarta.validation'
+        : 'javax.validation';
     const imports = new Set([
         'import lombok.Data;',
         'import java.io.Serial;',
@@ -333,6 +371,10 @@ function generateClass(className, fields) {
         if (cfg.type === 'LocalDateTime') imports.add('import java.time.LocalDateTime;');
         if (cfg.type === 'Timestamp') imports.add('import java.sql.Timestamp;');
         if (cfg.type.startsWith('List<')) imports.add('import java.util.List;');
+        const baseType = getBaseType(cfg.type);
+        if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
+            imports.add(`import ${validationBasePackage}.Valid;`);
+        }
     }
 
     let code = Array.from(imports).sort().join('\n') + '\n\n@Data\n';
@@ -349,6 +391,10 @@ function generateClass(className, fields) {
         if (cfg.jsonAlias) {
             const aliases = cfg.jsonAlias.split(',').map(a => `\"${a.trim()}\"`).join(', ');
             code += `    @JsonAlias(${aliases})\n`;
+        }
+        const baseType = getBaseType(cfg.type);
+        if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
+            code += `    @Valid\n`;
         }
         if (cfg.required) {
             code += cfg.type === 'String'
