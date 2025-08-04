@@ -362,8 +362,13 @@ function generateClass(className, fields) {
 
         if (cfg.jsonAlias) imports.add('import com.fasterxml.jackson.annotation.JsonAlias;');
         if (cfg.required) {
-            if (cfg.type === 'String') imports.add(`import ${validationPackage}.NotBlank;`);
-            else imports.add(`import ${validationPackage}.NotNull;`);
+            if (cfg.type === 'String') {
+                imports.add(`import ${validationPackage}.NotBlank;`);
+            } else if (cfg.type.startsWith('List<')) {
+                imports.add(`import ${validationPackage}.NotEmpty;`);
+            } else {
+                imports.add(`import ${validationPackage}.NotNull;`);
+            }
         }
         if (cfg.maxLength) imports.add(`import ${validationPackage}.Size;`);
         if (cfg.type === 'BigDecimal') imports.add('import java.math.BigDecimal;');
@@ -399,7 +404,9 @@ function generateClass(className, fields) {
         if (cfg.required) {
             code += cfg.type === 'String'
                 ? `    @NotBlank(message=\"${field.name} 不得為空\")\n`
-                : `    @NotNull(message=\"${field.name} 不得為空\")\n`;
+                : cfg.type.startsWith('List<')
+                    ? `    @NotEmpty(message=\"${field.name} 不得為空\")\n`
+                    : `    @NotNull(message=\"${field.name} 不得為空\")\n`;
         }
         if (cfg.maxLength) {
             code += `    @Size(message = \"${field.name} 長度不得超過 ${cfg.maxLength}\", max = ${cfg.maxLength})\n`;
