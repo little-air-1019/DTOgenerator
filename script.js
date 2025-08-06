@@ -217,25 +217,53 @@ function extractClasses(obj, rootName) {
         for (const key in obj) {
             const value = obj[key];
             const fieldPath = parentPath ? `${parentPath}.${key}` : key;
+            const existingField = classes[className].find(f => f.name === key);
 
             if (Array.isArray(value)) {
-                if (value.length > 0 && typeof value[0] === 'object' && value[0] !== null) {
+                const hasObject = value.some(v => v && typeof v === 'object');
+                if (hasObject) {
                     let itemClassName = key.endsWith('List') ? key.slice(0, -4) : key;
                     itemClassName = className + capitalize(itemClassName);
-                    classes[className].push({ name: key, type: itemClassName, isList: true });
-                    processObject(value[0], itemClassName, fieldPath);
+                    if (existingField) {
+                        existingField.type = itemClassName;
+                        existingField.isList = true;
+                    } else {
+                        classes[className].push({ name: key, type: itemClassName, isList: true });
+                    }
+                    const merged = {};
+                    for (const item of value) {
+                        if (item && typeof item === 'object') {
+                            Object.assign(merged, item);
+                        }
+                    }
+                    processObject(merged, itemClassName, fieldPath);
                 } else {
-                    classes[className].push({ name: key, type: 'String', isList: true });
+                    if (existingField) {
+                        existingField.type = 'String';
+                        existingField.isList = true;
+                    } else {
+                        classes[className].push({ name: key, type: 'String', isList: true });
+                    }
                 }
             } else if (typeof value === 'object' && value !== null) {
                 const nestedClassName = className + capitalize(key);
-                classes[className].push({ name: key, type: nestedClassName, isList: false });
+                if (existingField) {
+                    existingField.type = nestedClassName;
+                    existingField.isList = false;
+                } else {
+                    classes[className].push({ name: key, type: nestedClassName, isList: false });
+                }
                 processObject(value, nestedClassName, fieldPath);
             } else {
                 let type = 'String';
                 if (typeof value === 'number') type = Number.isInteger(value) ? 'Integer' : 'Double';
                 if (typeof value === 'boolean') type = 'Boolean';
-                classes[className].push({ name: key, type: type, isList: false });
+                if (existingField) {
+                    existingField.type = type;
+                    existingField.isList = false;
+                } else {
+                    classes[className].push({ name: key, type: type, isList: false });
+                }
             }
         }
     }
@@ -420,3 +448,7 @@ function generateClass(className, fields) {
 }
 
 copyBtn.addEventListener('click', copyToClipboard);
+
+if (typeof module !== 'undefined') {
+    module.exports = { extractClasses };
+}
