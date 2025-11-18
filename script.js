@@ -35,8 +35,6 @@ let fieldConfigurations = {};
 let currentField = null;
 let isRequest = false;
 let rootClassName = "";
-let classesMap = {};
-let classValidationMap = {};
 
 const programNameInput = document.getElementById('programName');
 const programNameError = document.getElementById('programNameError');
@@ -91,11 +89,10 @@ generateBtn.addEventListener('click', (e) => {
         displayStructure(jsonStructure, rootClassName);
         structurePanel.classList.remove('hidden');
 
-        classesMap = extractClasses(jsonStructure, rootClassName);
-        classValidationMap = computeValidationNeeds(classesMap);
+        const classes = extractClasses(jsonStructure, rootClassName);
         let javaCode = '';
-        for (const className in classesMap) {
-            javaCode += generateClass(className, classesMap[className]) + '\n\n';
+        for (const className in classes) {
+            javaCode += generateClass(className, classes[className]) + '\n\n';
         }
         outputEditor.setValue(javaCode, -1);
     } catch (error) {
@@ -149,10 +146,6 @@ function capitalize(str) {
 function isStandardType(type) {
     const standardTypes = ['String', 'Integer', 'Long', 'Double', 'Boolean', 'BigDecimal', 'LocalDate', 'LocalDateTime', 'Timestamp'];
     return standardTypes.includes(type);
-}
-
-function getBaseType(type) {
-    return type.startsWith('List<') ? type.slice(5, -1) : type;
 }
 
 function displayStructure(obj, path) {
@@ -217,86 +210,31 @@ function extractClasses(obj, rootName) {
         for (const key in obj) {
             const value = obj[key];
             const fieldPath = parentPath ? `${parentPath}.${key}` : key;
-            const existingField = classes[className].find(f => f.name === key);
 
             if (Array.isArray(value)) {
-                const hasObject = value.some(v => v && typeof v === 'object');
-                if (hasObject) {
+                if (value.length > 0 && typeof value[0] === 'object' && value[0] !== null) {
                     let itemClassName = key.endsWith('List') ? key.slice(0, -4) : key;
                     itemClassName = className + capitalize(itemClassName);
-                    if (existingField) {
-                        existingField.type = itemClassName;
-                        existingField.isList = true;
-                    } else {
-                        classes[className].push({ name: key, type: itemClassName, isList: true });
-                    }
-                    const merged = {};
-                    for (const item of value) {
-                        if (item && typeof item === 'object') {
-                            Object.assign(merged, item);
-                        }
-                    }
-                    processObject(merged, itemClassName, fieldPath);
+                    classes[className].push({ name: key, type: itemClassName, isList: true });
+                    processObject(value[0], itemClassName, fieldPath);
                 } else {
-                    if (existingField) {
-                        existingField.type = 'String';
-                        existingField.isList = true;
-                    } else {
-                        classes[className].push({ name: key, type: 'String', isList: true });
-                    }
+                    classes[className].push({ name: key, type: 'String', isList: true });
                 }
             } else if (typeof value === 'object' && value !== null) {
                 const nestedClassName = className + capitalize(key);
-                if (existingField) {
-                    existingField.type = nestedClassName;
-                    existingField.isList = false;
-                } else {
-                    classes[className].push({ name: key, type: nestedClassName, isList: false });
-                }
+                classes[className].push({ name: key, type: nestedClassName, isList: false });
                 processObject(value, nestedClassName, fieldPath);
             } else {
                 let type = 'String';
                 if (typeof value === 'number') type = Number.isInteger(value) ? 'Integer' : 'Double';
                 if (typeof value === 'boolean') type = 'Boolean';
-                if (existingField) {
-                    existingField.type = type;
-                    existingField.isList = false;
-                } else {
-                    classes[className].push({ name: key, type: type, isList: false });
-                }
+                classes[className].push({ name: key, type: type, isList: false });
             }
         }
     }
 
     processObject(obj, rootName);
     return classes;
-}
-
-function computeValidationNeeds(classes) {
-    const cache = {};
-
-    function needsValidation(className) {
-        if (cache[className] !== undefined) return cache[className];
-        let result = false;
-        for (const field of classes[className]) {
-            const cfg = fieldConfigurations[`${className}.${field.name}`];
-            if (cfg.required || cfg.maxLength) {
-                result = true;
-                break;
-            }
-            if (classes[field.type] && needsValidation(field.type)) {
-                result = true;
-                break;
-            }
-        }
-        cache[className] = result;
-        return result;
-    }
-
-    for (const cls in classes) {
-        needsValidation(cls);
-    }
-    return cache;
 }
 
 function openFieldModal(fieldPath) {
@@ -360,11 +298,10 @@ function saveFieldConfiguration() {
 
     // Re-generate DTO after saving field configuration
     if (jsonStructure && rootClassName) {
-        classesMap = extractClasses(jsonStructure, rootClassName);
-        classValidationMap = computeValidationNeeds(classesMap);
+        const classes = extractClasses(jsonStructure, rootClassName);
         let javaCode = '';
-        for (const className in classesMap) {
-            javaCode += generateClass(className, classesMap[className]) + '\n\n';
+        for (const className in classes) {
+            javaCode += generateClass(className, classes[className]) + '\n\n';
         }
         outputEditor.setValue(javaCode, -1);
     }
@@ -374,9 +311,6 @@ function generateClass(className, fields) {
     const validationPackage = javaVersionSelect.value === '17'
         ? 'jakarta.validation.constraints'
         : 'javax.validation.constraints';
-    const validationBasePackage = javaVersionSelect.value === '17'
-        ? 'jakarta.validation'
-        : 'javax.validation';
     const imports = new Set([
         'import lombok.Data;',
         'import java.io.Serial;',
@@ -390,24 +324,21 @@ function generateClass(className, fields) {
 
         if (cfg.jsonAlias) imports.add('import com.fasterxml.jackson.annotation.JsonAlias;');
         if (cfg.required) {
-            if (cfg.type === 'String') {
-                imports.add(`import ${validationPackage}.NotBlank;`);
-            } else if (cfg.type.startsWith('List<')) {
-                imports.add(`import ${validationPackage}.NotEmpty;`);
+            if (cfg.type === 'String') imports.add(`import ${validationPackage}.NotBlank;`);
+            else imports.add(`import ${validationPackage}.NotNull;`);
+        }
+        if (cfg.maxLength) {
+            if (['Integer', 'Long', 'Double', 'BigDecimal'].includes(cfg.type)) {
+                imports.add(`import ${validationPackage}.Max;`);
             } else {
-                imports.add(`import ${validationPackage}.NotNull;`);
+                imports.add(`import ${validationPackage}.Size;`);
             }
         }
-        if (cfg.maxLength) imports.add(`import ${validationPackage}.Size;`);
         if (cfg.type === 'BigDecimal') imports.add('import java.math.BigDecimal;');
         if (cfg.type === 'LocalDate') imports.add('import java.time.LocalDate;');
         if (cfg.type === 'LocalDateTime') imports.add('import java.time.LocalDateTime;');
         if (cfg.type === 'Timestamp') imports.add('import java.sql.Timestamp;');
         if (cfg.type.startsWith('List<')) imports.add('import java.util.List;');
-        const baseType = getBaseType(cfg.type);
-        if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
-            imports.add(`import ${validationBasePackage}.Valid;`);
-        }
     }
 
     let code = Array.from(imports).sort().join('\n') + '\n\n@Data\n';
@@ -425,19 +356,19 @@ function generateClass(className, fields) {
             const aliases = cfg.jsonAlias.split(',').map(a => `\"${a.trim()}\"`).join(', ');
             code += `    @JsonAlias(${aliases})\n`;
         }
-        const baseType = getBaseType(cfg.type);
-        if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
-            code += `    @Valid\n`;
-        }
         if (cfg.required) {
             code += cfg.type === 'String'
                 ? `    @NotBlank(message=\"${field.name} 不得為空\")\n`
-                : cfg.type.startsWith('List<')
-                    ? `    @NotEmpty(message=\"${field.name} 不得為空\")\n`
-                    : `    @NotNull(message=\"${field.name} 不得為空\")\n`;
+                : `    @NotNull(message=\"${field.name} 不得為空\")\n`;
         }
         if (cfg.maxLength) {
-            code += `    @Size(message = \"${field.name} 長度不得超過 ${cfg.maxLength}\", max = ${cfg.maxLength})\n`;
+            if (['Integer', 'Long', 'Double', 'BigDecimal'].includes(cfg.type)) {
+                // Convert length to max value: length 4 -> max value 9999
+                const maxValue = Math.pow(10, parseInt(cfg.maxLength)) - 1;
+                code += `    @Max(message = \"${field.name} 不得超過 ${maxValue}\", value = ${maxValue})\n`;
+            } else {
+                code += `    @Size(message = \"${field.name} 長度不得超過 ${cfg.maxLength}\", max = ${cfg.maxLength})\n`;
+            }
         }
         // Convert field.name to lower camel case
         const camelCaseName = field.name.replace(/^[A-Z]/, m => m.toLowerCase()).replace(/_([a-zA-Z])/g, (_, c) => c.toUpperCase());
@@ -448,7 +379,3 @@ function generateClass(className, fields) {
 }
 
 copyBtn.addEventListener('click', copyToClipboard);
-
-if (typeof module !== 'undefined') {
-    module.exports = { extractClasses };
-}
