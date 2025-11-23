@@ -356,7 +356,7 @@ function saveFieldConfiguration() {
 }
 
 function generateClass(className, fields) {
-    const validationPackage = javaVersionSelect.value === '17'
+    const validationPackage = javaVersionSelect.value === 'jakarta'
         ? 'jakarta.validation.constraints'
         : 'javax.validation.constraints';
     const imports = new Set([
