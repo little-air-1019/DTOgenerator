@@ -35,6 +35,8 @@ let fieldConfigurations = {};
 let currentField = null;
 let isRequest = false;
 let rootClassName = "";
+let classesMap = {};
+let classValidationMap = {};
 
 const programNameInput = document.getElementById('programName');
 const programNameError = document.getElementById('programNameError');
@@ -89,10 +91,11 @@ generateBtn.addEventListener('click', (e) => {
         displayStructure(jsonStructure, rootClassName);
         structurePanel.classList.remove('hidden');
 
-        const classes = extractClasses(jsonStructure, rootClassName);
+        classesMap = extractClasses(jsonStructure, rootClassName);
+        classValidationMap = computeValidationNeeds(classesMap);
         let javaCode = '';
-        for (const className in classes) {
-            javaCode += generateClass(className, classes[className]) + '\n\n';
+        for (const className in classesMap) {
+            javaCode += generateClass(className, classesMap[className]) + '\n\n';
         }
         outputEditor.setValue(javaCode, -1);
     } catch (error) {
@@ -146,6 +149,50 @@ function capitalize(str) {
 function isStandardType(type) {
     const standardTypes = ['String', 'Integer', 'Long', 'Double', 'Boolean', 'BigDecimal', 'LocalDate', 'LocalDateTime', 'Timestamp'];
     return standardTypes.includes(type);
+}
+
+function isNumericType(type) {
+    const numericTypes = ['Integer', 'Long', 'Short', 'BigInteger', 'Double', 'Float', 'BigDecimal'];
+    return numericTypes.includes(type);
+}
+
+function getBaseType(type) {
+    return type.startsWith('List<') ? type.slice(5, -1) : type;
+}
+
+function classHasValidation(className, classes, fieldConfigs) {
+    // Recursively check if this class or any of its nested children have validation
+    const fields = classes[className];
+    if (!fields) return false;
+
+    for (const field of fields) {
+        const path = `${className}.${field.name}`;
+        const cfg = fieldConfigs[path];
+
+        // Check if field has validation annotations
+        if (cfg && (cfg.required || cfg.maxLength)) {
+            return true;
+        }
+
+        // Check nested objects recursively
+        const baseType = getBaseType(cfg.type);
+        if (!isStandardType(baseType) && classes[baseType]) {
+            if (classHasValidation(baseType, classes, fieldConfigs)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function computeValidationNeeds(classes) {
+    // Build a map of which classes need validation
+    const validationMap = {};
+    for (const className in classes) {
+        validationMap[className] = classHasValidation(className, classes, fieldConfigurations);
+    }
+    return validationMap;
 }
 
 function displayStructure(obj, path) {
@@ -298,10 +345,11 @@ function saveFieldConfiguration() {
 
     // Re-generate DTO after saving field configuration
     if (jsonStructure && rootClassName) {
-        const classes = extractClasses(jsonStructure, rootClassName);
+        classesMap = extractClasses(jsonStructure, rootClassName);
+        classValidationMap = computeValidationNeeds(classesMap);
         let javaCode = '';
-        for (const className in classes) {
-            javaCode += generateClass(className, classes[className]) + '\n\n';
+        for (const className in classesMap) {
+            javaCode += generateClass(className, classesMap[className]) + '\n\n';
         }
         outputEditor.setValue(javaCode, -1);
     }
@@ -324,15 +372,26 @@ function generateClass(className, fields) {
 
         if (cfg.jsonAlias) imports.add('import com.fasterxml.jackson.annotation.JsonAlias;');
         if (cfg.required) {
-            if (cfg.type === 'String') imports.add(`import ${validationPackage}.NotBlank;`);
-            else imports.add(`import ${validationPackage}.NotNull;`);
+            if (cfg.type === 'String') {
+                imports.add(`import ${validationPackage}.NotBlank;`);
+            } else if (cfg.type.startsWith('List<')) {
+                imports.add(`import ${validationPackage}.NotEmpty;`);
+            } else {
+                imports.add(`import ${validationPackage}.NotNull;`);
+            }
         }
         if (cfg.maxLength) {
-            if (['Integer', 'Long', 'Double', 'BigDecimal'].includes(cfg.type)) {
+            // Use @Max for numeric types, @Size for others
+            if (isNumericType(cfg.type)) {
                 imports.add(`import ${validationPackage}.Max;`);
             } else {
                 imports.add(`import ${validationPackage}.Size;`);
             }
+        }
+        // Add @Valid import for nested objects that have validation
+        const baseType = getBaseType(cfg.type);
+        if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
+            imports.add(`import ${validationPackage}.Valid;`);
         }
         if (cfg.type === 'BigDecimal') imports.add('import java.math.BigDecimal;');
         if (cfg.type === 'LocalDate') imports.add('import java.time.LocalDate;');
@@ -356,13 +415,21 @@ function generateClass(className, fields) {
             const aliases = cfg.jsonAlias.split(',').map(a => `\"${a.trim()}\"`).join(', ');
             code += `    @JsonAlias(${aliases})\n`;
         }
+        // Add @Valid for nested objects that have validation
+        const baseType = getBaseType(cfg.type);
+        if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
+            code += `    @Valid\n`;
+        }
         if (cfg.required) {
             code += cfg.type === 'String'
                 ? `    @NotBlank(message=\"${field.name} 不得為空\")\n`
-                : `    @NotNull(message=\"${field.name} 不得為空\")\n`;
+                : cfg.type.startsWith('List<')
+                    ? `    @NotEmpty(message=\"${field.name} 不得為空\")\n`
+                    : `    @NotNull(message=\"${field.name} 不得為空\")\n`;
         }
         if (cfg.maxLength) {
-            if (['Integer', 'Long', 'Double', 'BigDecimal'].includes(cfg.type)) {
+            // Use @Max for numeric types with calculated value, @Size for others
+            if (isNumericType(cfg.type)) {
                 // Convert length to max value: length 4 -> max value 9999
                 const maxValue = Math.pow(10, parseInt(cfg.maxLength)) - 1;
                 code += `    @Max(message = \"${field.name} 不得超過 ${maxValue}\", value = ${maxValue})\n`;
