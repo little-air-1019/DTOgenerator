@@ -355,10 +355,30 @@ function saveFieldConfiguration() {
     }
 }
 
-function generateClass(className, fields) {
-    const validationPackage = javaVersionSelect.value === 'jakarta'
+// --- Utility: type import map ---
+const TYPE_IMPORTS = {
+    BigDecimal: 'import java.math.BigDecimal;',
+    LocalDate: 'import java.time.LocalDate;',
+    LocalDateTime: 'import java.time.LocalDateTime;',
+    Timestamp: 'import java.sql.Timestamp;'
+};
+
+// --- Utility: camelCase conversion ---
+function toCamelCase(str) {
+    return str.replace(/^[A-Z]/, m => m.toLowerCase())
+        .replace(/_([a-zA-Z])/g, (_, c) => c.toUpperCase());
+}
+
+// --- Utility: get validation package ---
+function getValidationPackage() {
+    return javaVersionSelect.value === 'jakarta'
         ? 'jakarta.validation.constraints'
         : 'javax.validation.constraints';
+}
+
+// --- JSON Mode: Code Generation ---
+function generateClass(className, fields) {
+    const validationPackage = getValidationPackage();
     const imports = new Set([
         'import lombok.Data;',
         'import java.io.Serial;',
@@ -369,80 +389,332 @@ function generateClass(className, fields) {
     for (const field of fields) {
         const path = `${className}.${field.name}`;
         const cfg = fieldConfigurations[path];
+        const baseType = getBaseType(cfg.type);
 
         if (cfg.jsonAlias) imports.add('import com.fasterxml.jackson.annotation.JsonAlias;');
         if (cfg.required) {
-            if (cfg.type === 'String') {
-                imports.add(`import ${validationPackage}.NotBlank;`);
-            } else if (cfg.type.startsWith('List<')) {
-                imports.add(`import ${validationPackage}.NotEmpty;`);
-            } else {
-                imports.add(`import ${validationPackage}.NotNull;`);
-            }
+            const annotationType = baseType === 'String' ? 'NotBlank'
+                : cfg.type.startsWith('List<') ? 'NotEmpty' : 'NotNull';
+            imports.add(`import ${validationPackage}.${annotationType};`);
         }
+
         if (cfg.maxLength) {
-            // Use @Max for numeric types, @Size for others
-            if (isNumericType(cfg.type)) {
-                imports.add(`import ${validationPackage}.Max;`);
-            } else {
-                imports.add(`import ${validationPackage}.Size;`);
-            }
+            imports.add(`import ${validationPackage}.${isNumericType(baseType) ? 'Max' : 'Size'};`);
         }
-        // Add @Valid import for nested objects that have validation
-        const baseType = getBaseType(cfg.type);
+
         if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
             imports.add(`import ${validationPackage}.Valid;`);
         }
-        if (cfg.type === 'BigDecimal') imports.add('import java.math.BigDecimal;');
-        if (cfg.type === 'LocalDate') imports.add('import java.time.LocalDate;');
-        if (cfg.type === 'LocalDateTime') imports.add('import java.time.LocalDateTime;');
-        if (cfg.type === 'Timestamp') imports.add('import java.sql.Timestamp;');
+
+        if (TYPE_IMPORTS[baseType]) imports.add(TYPE_IMPORTS[baseType]);
         if (cfg.type.startsWith('List<')) imports.add('import java.util.List;');
     }
 
-    let code = Array.from(imports).sort().join('\n') + '\n\n@Data\n';
+    let code = `${Array.from(imports).sort().join('\n')}\n\n@Data\n`;
+    code += `public class ${className} implements Serializable {\n\n`;
+    code += '    /** serialVersionUID */\n';
+    code += '    private static final long serialVersionUID = 1L;\n\n';
+    code += fields.map(field => generateField(className, field, validationPackage)).join('\n');
+    code += '}';
+
+    return code;
+}
+
+function generateField(className, field, validationPackage) {
+    const path = `${className}.${field.name}`;
+    const cfg = fieldConfigurations[path];
+    const baseType = getBaseType(cfg.type);
+    const annotations = [];
+
+    if (cfg.comment) annotations.push(`    /** ${cfg.comment} */`);
+
+    annotations.push(`    @JsonProperty("${field.name}")`);
+
+    if (cfg.jsonAlias) {
+        const aliases = cfg.jsonAlias.split(',').map(a => `"${a.trim()}"`).join(', ');
+        annotations.push(`    @JsonAlias(${aliases})`);
+    }
+
+    if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
+        annotations.push(`    @Valid`);
+    }
+
+    if (cfg.required) {
+        const message = `${field.name} 不得為空`;
+        const annotationType = baseType === 'String' ? 'NotBlank'
+            : cfg.type.startsWith('List<') ? 'NotEmpty' : 'NotNull';
+        annotations.push(`    @${annotationType}(message="${message}")`);
+    }
+
+    if (cfg.maxLength) {
+        if (isNumericType(baseType)) {
+            const maxValue = Math.pow(10, parseInt(cfg.maxLength)) - 1;
+            annotations.push(`    @Max(message = "${field.name} 不得超過 ${maxValue}", value = ${maxValue})`);
+        } else {
+            annotations.push(`    @Size(message = "${field.name} 長度不得超過 ${cfg.maxLength}", max = ${cfg.maxLength})`);
+        }
+    }
+
+    const camelCaseName = toCamelCase(field.name);
+    annotations.push(`    private ${cfg.type} ${camelCaseName};\n`);
+
+    return annotations.join('\n');
+}
+
+// --- Copy Button ---
+copyBtn.addEventListener('click', copyToClipboard);
+
+// --- Spec Text Tab Elements ---
+const specElements = {
+    tabJson: document.getElementById('tabJson'),
+    tabSpec: document.getElementById('tabSpec'),
+    jsonPanel: document.getElementById('jsonPanel'),
+    specPanel: document.getElementById('specPanel'),
+    specTextArea: document.getElementById('specTextArea'),
+    parseSpecBtn: document.getElementById('parseSpecBtn')
+};
+
+// --- Tab Switching ---
+const switchTab = (activeTab) => {
+    const tabs = [specElements.tabJson, specElements.tabSpec];
+    const panels = [specElements.jsonPanel, specElements.specPanel];
+
+    tabs.forEach((tab, i) => {
+        const isActive = tab === activeTab;
+        tab.classList.toggle('border-primary-500', isActive);
+        tab.classList.toggle('text-primary-700', isActive);
+        tab.classList.toggle('border-transparent', !isActive);
+        tab.classList.toggle('text-gray-500', !isActive);
+        panels[i].classList.toggle('hidden', !isActive);
+    });
+};
+
+specElements.tabJson.addEventListener('click', () => switchTab(specElements.tabJson));
+specElements.tabSpec.addEventListener('click', () => switchTab(specElements.tabSpec));
+
+// --- Spec Text Parsing ---
+
+/**
+ * Normalize type strings from spec text (e.g. 'integer' -> 'Integer').
+ */
+const normalizeType = (rawType) => {
+    const typeMap = {
+        'string': 'String', 'integer': 'Integer', 'int': 'Integer',
+        'long': 'Long', 'double': 'Double', 'float': 'Float',
+        'boolean': 'Boolean', 'bigdecimal': 'BigDecimal',
+        'localdate': 'LocalDate', 'localdatetime': 'LocalDateTime',
+        'timestamp': 'Timestamp'
+    };
+    return typeMap[rawType.toLowerCase()] || rawType;
+};
+
+/**
+ * Compute which classes need @Valid (i.e. have validation annotations).
+ */
+const computeSpecValidation = (specClassesMap) => {
+    const cache = {};
+    const check = (className) => {
+        if (cache[className] !== undefined) return cache[className];
+        cache[className] = false;
+        const fields = specClassesMap[className];
+        if (!fields) return false;
+        cache[className] = fields.some(f => {
+            if (f.required || f.length) return true;
+            if (f.nestedClass) return check(f.nestedClass);
+            return false;
+        });
+        return cache[className];
+    };
+    Object.keys(specClassesMap).forEach(check);
+    return cache;
+};
+
+/**
+ * Generate a single Java DTO class from spec fields.
+ */
+const generateSpecClass = (className, fields, specClassesMap, validationMap) => {
+    const validationPackage = getValidationPackage();
+    const imports = new Set([
+        'import lombok.Data;',
+        'import java.io.Serial;',
+        'import java.io.Serializable;',
+        'import com.fasterxml.jackson.annotation.JsonProperty;'
+    ]);
+
+    fields.forEach(field => {
+        if (field.required) {
+            const aType = field.type === 'String' ? 'NotBlank'
+                : field.isList ? 'NotEmpty' : 'NotNull';
+            imports.add(`import ${validationPackage}.${aType};`);
+        }
+
+        if (field.length) {
+            imports.add(`import ${validationPackage}.${isNumericType(field.type) ? 'Max' : 'Size'};`);
+        }
+
+        if (field.nestedClass && validationMap[field.nestedClass]) {
+            imports.add(`import ${validationPackage}.Valid;`);
+        }
+
+        if (field.isList) imports.add('import java.util.List;');
+        if (TYPE_IMPORTS[field.type]) imports.add(TYPE_IMPORTS[field.type]);
+    });
+
+    let code = `${Array.from(imports).sort().join('\n')}\n\n@Data\n`;
     code += `public class ${className} implements Serializable {\n\n`;
     code += '    /** serialVersionUID */\n';
     code += '    private static final long serialVersionUID = 1L;\n\n';
 
-    for (const field of fields) {
-        const path = `${className}.${field.name}`;
-        const cfg = fieldConfigurations[path];
+    code += fields.map(field => {
+        const annotations = [];
+        const displayType = field.isList ? `List<${field.nestedClass}>` : field.type;
 
-        if (cfg.comment) code += `    /** ${cfg.comment} */\n`;
-        code += `    @JsonProperty(\"${field.name}\")\n`;
-        if (cfg.jsonAlias) {
-            const aliases = cfg.jsonAlias.split(',').map(a => `\"${a.trim()}\"`).join(', ');
-            code += `    @JsonAlias(${aliases})\n`;
+        annotations.push(`    /** ${field.comment} */`);
+        annotations.push(`    @JsonProperty("${field.originalName}")`);
+
+        if (field.nestedClass && validationMap[field.nestedClass]) {
+            annotations.push(`    @Valid`);
         }
-        // Add @Valid for nested objects that have validation
-        const baseType = getBaseType(cfg.type);
-        if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
-            code += `    @Valid\n`;
+
+        if (field.required) {
+            const message = `${field.originalName} 不得為空`;
+            const aType = field.type === 'String' ? 'NotBlank'
+                : field.isList ? 'NotEmpty' : 'NotNull';
+            annotations.push(`    @${aType}(message="${message}")`);
         }
-        if (cfg.required) {
-            code += cfg.type === 'String'
-                ? `    @NotBlank(message=\"${field.name} 不得為空\")\n`
-                : cfg.type.startsWith('List<')
-                    ? `    @NotEmpty(message=\"${field.name} 不得為空\")\n`
-                    : `    @NotNull(message=\"${field.name} 不得為空\")\n`;
-        }
-        if (cfg.maxLength) {
-            // Use @Max for numeric types with calculated value, @Size for others
-            if (isNumericType(cfg.type)) {
-                // Convert length to max value: length 4 -> max value 9999
-                const maxValue = Math.pow(10, parseInt(cfg.maxLength)) - 1;
-                code += `    @Max(message = \"${field.name} 不得超過 ${maxValue}\", value = ${maxValue})\n`;
+
+        if (field.length) {
+            if (isNumericType(field.type)) {
+                const maxValue = Math.pow(10, parseInt(field.length)) - 1;
+                annotations.push(`    @Max(message = "${field.originalName} 不得超過 ${maxValue}", value = ${maxValue})`);
             } else {
-                code += `    @Size(message = \"${field.name} 長度不得超過 ${cfg.maxLength}\", max = ${cfg.maxLength})\n`;
+                annotations.push(`    @Size(message = "${field.originalName} 長度不得超過 ${field.length}", max = ${field.length})`);
             }
         }
-        // Convert field.name to lower camel case
-        const camelCaseName = field.name.replace(/^[A-Z]/, m => m.toLowerCase()).replace(/_([a-zA-Z])/g, (_, c) => c.toUpperCase());
-        code += `    private ${cfg.type} ${camelCaseName};\n\n`;
-    }
+
+        annotations.push(`    private ${displayType} ${field.camelName};\n`);
+        return annotations.join('\n');
+    }).join('\n');
+
     code += '}';
     return code;
-}
+};
 
-copyBtn.addEventListener('click', copyToClipboard);
+/**
+ * Handle the Parse & Generate button click.
+ * Supports multi-level hierarchy and TRANRQ/TRANRS detection.
+ */
+const handleParseSpec = (e) => {
+    if (!validateProgramName()) {
+        e.preventDefault();
+        return;
+    }
+
+    const specText = specElements.specTextArea.value;
+    if (!specText.trim()) {
+        alert('Please paste spec text first.');
+        return;
+    }
+
+    const programName = programNameInput.value.trim();
+    const lines = specText.split('\n');
+
+    // --- Pass 1: Parse lines into hierarchical class map ---
+    let direction = null;
+    let specRootClassName = null;
+    const specClassesMap = {};
+    const levelToClass = {};
+
+    for (const line of lines) {
+        if (!line.trim()) continue;
+
+        const cells = line.split('\t');
+        const levelStr = cells[0]?.trim();
+        const level = parseInt(levelStr);
+
+        if (isNaN(level) || level < 1) continue;
+
+        const rawName = cells[1]?.trim();
+        if (!rawName) continue;
+
+        if (level === 1) {
+            const upper = rawName.toUpperCase();
+            if (upper === 'TRANRQ') direction = 'Tranrq';
+            else if (upper === 'TRANRS') direction = 'Tranrs';
+            else direction = capitalize(rawName);
+
+            specRootClassName = programName + direction;
+            specClassesMap[specRootClassName] = [];
+            levelToClass[level + 1] = specRootClassName;
+            continue;
+        }
+
+        const parentClass = levelToClass[level];
+        if (!parentClass) continue;
+
+        const rawType = cells[2]?.trim() || 'String';
+        const lengthRaw = cells[3]?.trim() || '';
+        const length = (lengthRaw && lengthRaw !== '-') ? lengthRaw : '';
+        const requiredRaw = cells[4]?.trim() || '';
+        const isRequired = requiredRaw.toUpperCase() === 'Y';
+        const description = cells[5]?.trim() || rawName;
+
+        if (rawType === 'List<Object>') {
+            const suffix = rawName.endsWith('List')
+                ? capitalize(rawName.slice(0, -4))
+                : capitalize(rawName);
+            const nestedClassName = parentClass + suffix;
+
+            specClassesMap[nestedClassName] = [];
+            levelToClass[level + 1] = nestedClassName;
+
+            specClassesMap[parentClass].push({
+                originalName: rawName,
+                camelName: toCamelCase(rawName),
+                type: 'List',
+                isList: true,
+                nestedClass: nestedClassName,
+                length: '',
+                required: isRequired,
+                comment: description
+            });
+            continue;
+        }
+
+        const type = normalizeType(rawType);
+
+        specClassesMap[parentClass].push({
+            originalName: rawName,
+            camelName: toCamelCase(rawName),
+            type,
+            isList: false,
+            nestedClass: null,
+            length,
+            required: isRequired,
+            comment: description
+        });
+    }
+
+    if (!specRootClassName || Object.keys(specClassesMap).length === 0) {
+        alert('No valid fields found. Make sure line 1 contains TRANRQ or TRANRS.');
+        return;
+    }
+
+    const totalFields = Object.values(specClassesMap).reduce((sum, f) => sum + f.length, 0);
+    if (totalFields === 0) {
+        alert('No valid fields found. Please check the input format.');
+        return;
+    }
+
+    // --- Pass 2: Generate Java classes ---
+    const validationMap = computeSpecValidation(specClassesMap);
+
+    const javaCode = Object.entries(specClassesMap)
+        .map(([cn, fields]) => generateSpecClass(cn, fields, specClassesMap, validationMap))
+        .join('\n\n');
+
+    outputEditor.setValue(javaCode, -1);
+    structurePanel.classList.add('hidden');
+};
+
+specElements.parseSpecBtn.addEventListener('click', handleParseSpec);
