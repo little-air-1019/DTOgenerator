@@ -403,7 +403,7 @@ function generateClass(className, fields) {
         }
 
         if (!isStandardType(baseType) && classesMap[baseType] && classValidationMap[baseType]) {
-            imports.add(`import ${validationPackage}.Valid;`);
+            imports.add(javaVersionSelect.value === 'jakarta' ? 'import jakarta.validation.Valid;' : 'import javax.validation.Valid;');
         }
 
         if (TYPE_IMPORTS[baseType]) imports.add(TYPE_IMPORTS[baseType]);
@@ -553,7 +553,7 @@ const generateSpecClass = (className, fields, specClassesMap, validationMap) => 
         }
 
         if (field.nestedClass && validationMap[field.nestedClass]) {
-            imports.add(`import ${validationPackage}.Valid;`);
+            imports.add(javaVersionSelect.value === 'jakarta' ? 'import jakarta.validation.Valid;' : 'import javax.validation.Valid;');
         }
 
         if (field.isList) imports.add('import java.util.List;');
