@@ -567,7 +567,9 @@ const generateSpecClass = (className, fields, specClassesMap, validationMap) => 
 
     code += fields.map(field => {
         const annotations = [];
-        const displayType = field.isList ? `List<${field.nestedClass}>` : field.type;
+        const displayType = field.isList
+            ? `List<${field.nestedClass || field.type}>`
+            : field.type;
 
         annotations.push(`    /** ${field.comment} */`);
         annotations.push(`    @JsonProperty("${field.originalName}")`);
@@ -659,7 +661,7 @@ const handleParseSpec = (e) => {
         const isRequired = requiredRaw.toUpperCase() === 'Y';
         const description = cells[5]?.trim() || rawName;
 
-        if (rawType === 'List<Object>') {
+        if (rawType === 'List<Object>' || rawType === 'List') {
             const suffix = rawName.endsWith('List')
                 ? capitalize(rawName.slice(0, -4))
                 : capitalize(rawName);
@@ -674,6 +676,23 @@ const handleParseSpec = (e) => {
                 type: 'List',
                 isList: true,
                 nestedClass: nestedClassName,
+                length: '',
+                required: isRequired,
+                comment: description
+            });
+            continue;
+        }
+
+        // Handle List<primitive> types, e.g. List<string> -> List<String>
+        const listPrimitiveMatch = rawType.match(/^List<(\w+)>$/i);
+        if (listPrimitiveMatch && listPrimitiveMatch[1].toLowerCase() !== 'object') {
+            const innerType = normalizeType(listPrimitiveMatch[1]);
+            specClassesMap[parentClass].push({
+                originalName: rawName,
+                camelName: toCamelCase(rawName),
+                type: innerType,
+                isList: true,
+                nestedClass: null,
                 length: '',
                 required: isRequired,
                 comment: description
