@@ -619,7 +619,26 @@ const handleParseSpec = (e) => {
     }
 
     const programName = programNameInput.value.trim();
-    const lines = specText.split('\n');
+    const rawLines = specText.split('\n');
+
+    // --- Pre-process: merge continuation lines ---
+    // When pasting from Word/Excel, a cell value like "FiberOpticList[i].\nFiberOpticPack"
+    // may be split across two lines. Detect this and merge them back together.
+    const lines = [];
+    for (let i = 0; i < rawLines.length; i++) {
+        const line = rawLines[i];
+        if (!line.trim()) continue;
+
+        const firstCell = line.split('\t')[0]?.trim();
+        if (!isNaN(parseInt(firstCell)) && parseInt(firstCell) >= 1) {
+            // Line starts with a valid level number – it's a normal line
+            lines.push(line);
+        } else if (lines.length > 0) {
+            // No valid level number – treat as continuation of previous line
+            // Concatenate directly so the split field name is rejoined
+            lines[lines.length - 1] += line;
+        }
+    }
 
     // --- Pass 1: Parse lines into hierarchical class map ---
     let direction = null;
@@ -628,16 +647,18 @@ const handleParseSpec = (e) => {
     const levelToClass = {};
 
     for (const line of lines) {
-        if (!line.trim()) continue;
-
         const cells = line.split('\t');
         const levelStr = cells[0]?.trim();
         const level = parseInt(levelStr);
 
         if (isNaN(level) || level < 1) continue;
 
-        const rawName = cells[1]?.trim();
+        let rawName = cells[1]?.trim();
         if (!rawName) continue;
+
+        // Strip "ListName[i]." or "ListName[n]." prefix from field names
+        // e.g. "FiberOpticList[i].FiberOpticPack" → "FiberOpticPack"
+        rawName = rawName.replace(/^\w+\[\w+\]\./, '');
 
         if (level === 1) {
             const upper = rawName.toUpperCase();
